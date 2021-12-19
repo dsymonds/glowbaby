@@ -283,8 +283,17 @@ func sync(ctx context.Context, db *sql.DB) error {
 			return fmt.Errorf("updating baby sync status in DB: %w", err)
 		}
 
+		for _, bd := range baby.BabyData.Remove {
+			_, err := tx.ExecContext(ctx, `DELETE FROM BabyData WHERE ID = ?`, bd.ID)
+			if err != nil {
+				return fmt.Errorf("deleting baby data from DB: %w", err)
+			}
+		}
+		if n := len(baby.BabyData.Remove); n > 0 {
+			log.Printf("Removed %d old baby data events", n)
+		}
 		for _, bd := range baby.BabyData.Update {
-			_, err = tx.ExecContext(ctx,
+			_, err := tx.ExecContext(ctx,
 				`INSERT OR REPLACE INTO BabyData(ID, BabyID, StartTimestamp, EndTimestamp, Key, ValInt, ValFloat, ValStr)
 				VALUES(?, ?, ?, ?, ?, ?, ?, ?)`,
 				bd.ID, bd.BabyID, bd.StartTimestamp, sqlNullInt64(bd.EndTimestamp), bd.Key, bd.ValInt, bd.ValFloat, bd.ValStr)
@@ -293,7 +302,16 @@ func sync(ctx context.Context, db *sql.DB) error {
 			}
 		}
 		log.Printf("Applied %d baby data updates", len(baby.BabyData.Update))
-		// TODO: baby.BabyData.Remove
+
+		for _, bd := range baby.BabyFeedData.Remove {
+			_, err := tx.ExecContext(ctx, `DELETE FROM BabyFeedData WHERE ID = ?`, bd.ID)
+			if err != nil {
+				return fmt.Errorf("deleting baby data from DB: %w", err)
+			}
+		}
+		if n := len(baby.BabyFeedData.Remove); n > 0 {
+			log.Printf("Removed %d old baby feed data events", n)
+		}
 		for _, bfd := range baby.BabyFeedData.Update {
 			_, err = tx.ExecContext(ctx,
 				`INSERT OR REPLACE INTO BabyFeedData(ID, BabyID, StartTimestamp, FeedType, BreastUsed, BreastLeft, BreastRight, BottleML)
@@ -304,7 +322,6 @@ func sync(ctx context.Context, db *sql.DB) error {
 			}
 		}
 		log.Printf("Applied %d baby feed data updates", len(baby.BabyFeedData.Update))
-		// TODO: baby.BabyFeedData.Remove
 	}
 
 	// Finalise transaction.
