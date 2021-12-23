@@ -9,6 +9,7 @@ type LoginResponse struct {
 
 				FirstName string `json:"first_name"`
 				LastName  string `json:"last_name"`
+				Birthday  string `json:"birthday"` // "YYYY/MM/DD" format
 			} `json:"Baby"`
 		} `json:"babies"`
 

@@ -88,6 +88,7 @@ CREATE TABLE Babies (
 
 	FirstName TEXT NOT NULL,
 	LastName TEXT NOT NULL,
+	Birthday TEXT NOT NULL,  -- YYYY-MM-DD
 
 	-- Sync status.
 	SyncTime INTEGER,
@@ -181,9 +182,17 @@ func login(ctx context.Context, db *sql.DB) error {
 	for _, babyRec := range loginResp.Data.Babies {
 		baby := babyRec.Baby
 		log.Printf("Setting up sync info for baby %s %s (baby ID %d) ...", baby.FirstName, baby.LastName, baby.BabyID)
+
+		// Transform birthday format into ISO 8601.
+		t, err := time.Parse("2006/01/02", baby.Birthday)
+		if err != nil {
+			return fmt.Errorf("baby has malformed birthday %q: %w", baby.Birthday, err)
+		}
+		tStr := t.Format("2006-01-02")
+
 		// TODO: automatic conflict resolution?
-		_, err := tx.ExecContext(ctx, `INSERT INTO Babies(BabyID, FirstName, LastName) VALUES (?, ?, ?)`,
-			baby.BabyID, baby.FirstName, baby.LastName)
+		_, err = tx.ExecContext(ctx, `INSERT INTO Babies(BabyID, FirstName, LastName, Birthday) VALUES (?, ?, ?, ?)`,
+			baby.BabyID, baby.FirstName, baby.LastName, tStr)
 		if err != nil {
 			return fmt.Errorf("recording baby sync info in DB: %w", err)
 		}
