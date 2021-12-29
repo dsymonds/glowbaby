@@ -80,7 +80,8 @@ func plotSleep(ctx context.Context, db *sql.DB) ([]byte, error) {
 	// Add a title.
 	err = writeText(img, 5, 5+plotTextSize, fmt.Sprintf("Sleep segments for %s %s (born %s)", firstName, lastName, bday))
 	if err != nil {
-		log.Printf("Writing text: %w", err)
+		log.Printf("Writing text: %v", err)
+		// Continue anyway. This was likely a font-loading issue.
 	}
 
 	// Plot data.
