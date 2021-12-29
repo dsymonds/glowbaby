@@ -31,6 +31,7 @@ Commands:
 	init			initialise the database file (specified by -db)
 	login			log in to Glow Baby (using credentials ~/.glowbabyrc)
 	sync			synchronise all data from remote
+	plot <type> <dst>	plot data to PNG (type is "sleep")
 
 Options:
 `
@@ -74,6 +75,28 @@ func main() {
 			log.Fatalf("Syncing data: %v", err)
 		}
 		log.Printf("Synced data OK in %v", time.Since(start).Truncate(100*time.Millisecond))
+	case "plot":
+		if flag.NArg() != 3 {
+			flag.Usage()
+			os.Exit(1)
+		}
+		typ, dst := flag.Arg(1), flag.Arg(2)
+		var data []byte
+		switch typ {
+		default:
+			flag.Usage()
+			os.Exit(1)
+		case "sleep":
+			b, err := plotSleep(context.Background(), db)
+			if err != nil {
+				log.Fatalf("Plotting sleep data: %v", err)
+			}
+			data = b
+		}
+		if err := ioutil.WriteFile(dst, data, 0644); err != nil {
+			log.Fatalf("Writing plot to %s: %v", dst, err)
+		}
+		log.Printf("OK; wrote %q plot to %s (%d bytes)", typ, dst, len(data))
 	}
 }
 
