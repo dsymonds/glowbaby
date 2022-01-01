@@ -135,7 +135,7 @@ func (pp *polarPlot) Render() ([]byte, error) {
 	// Segments spanning midnight will
 	splitEpoch := func(x int64) (day int, frac float64) {
 		t := time.Unix(x, 0).In(time.Local)
-		day = int(t.Sub(pp.zero) / (24 * time.Hour))
+		day = dayDiff(pp.zero, t)
 		h, m, s := t.Clock()
 		frac = float64(h)/24 + float64(m)/(24*60) + float64(s)/(24*60*60)
 		return
@@ -191,4 +191,21 @@ func writeText(img *image.NRGBA, x, y int, text string) error {
 	ctx.SetSrc(&image.Uniform{color.Black})
 	_, err = ctx.DrawString(text, freetype.Pt(x, y))
 	return err
+}
+
+// dayDiff reports the number of calendar days between the given times.
+// Zero means start and end are on the same day.
+func dayDiff(start, end time.Time) (days int) {
+	if start.After(end) {
+		panic("start after end")
+	}
+
+	// Extract the calendar dates in the correct time zone, then do the computation in UTC,
+	// which is simply dividing the unix epoch difference by 86400.
+	sY, sM, sD := start.Date()
+	eY, eM, eD := end.Date()
+	s0 := time.Date(sY, sM, sD, 0, 0, 0, 0, time.UTC)
+	e0 := time.Date(eY, eM, eD, 0, 0, 0, 0, time.UTC)
+
+	return int(e0.Unix()-s0.Unix()) / 86400
 }
