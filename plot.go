@@ -31,6 +31,8 @@ func plot(ctx context.Context, db *sql.DB, typ string) ([]byte, error) {
 		return nil, fmt.Errorf("unknown plot type %q", typ)
 	case "sleep":
 		return plotSleep(ctx, db)
+	case "feed":
+		return plotFeed(ctx, db)
 	}
 }
 
@@ -112,6 +114,54 @@ func plotSleep(ctx context.Context, db *sql.DB) ([]byte, error) {
 		default:
 			return color.NRGBA{255, 0, 0, 255} // red
 		}
+	}
+
+	return pp.Render()
+}
+
+func plotFeed(ctx context.Context, db *sql.DB) ([]byte, error) {
+	// Load baby info.
+	// TODO: Handle multiple babies.
+	info, err := loadOneBaby(ctx, db)
+	if err != nil {
+		return nil, err
+	}
+	log.Printf("Selected %s %s (born %s) for feed plotting", info.firstName, info.lastName, info.birthday.Format("2006-01-02"))
+
+	// Load feed data.
+	// Only start timestamp and per-breast times are available.
+	// TODO: Include bottle feeding too somehow. Maybe that has end timestamps?
+	var pp polarPlot
+	rows, err := db.QueryContext(ctx, `
+		SELECT StartTimestamp, BreastLeft, BreastRight FROM BabyFeedData
+		WHERE BabyID = ? ORDER BY StartTimestamp`, info.babyID)
+	if err != nil {
+		return nil, fmt.Errorf("loading feeds: %w", err)
+	}
+	for rows.Next() {
+		var start, left, right int64
+		if err := rows.Scan(&start, &left, &right); err != nil {
+			return nil, fmt.Errorf("scanning feeds from DB: %w", err)
+		}
+		pp.AddSegment(start, start+left+right)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("loading feeds from DB: %w", err)
+	}
+	log.Printf("Loaded %d feeds", len(pp.segments))
+
+	if len(pp.segments) == 0 {
+		log.Fatalf("Sorry, can't plot without any feeds recorded!")
+	}
+
+	pp.title = fmt.Sprintf("Feeds for %s %s (born %s)", info.firstName, info.lastName, info.birthday.Format("2006-01-02"))
+	pp.zero = info.birthday
+	pp.colSelect = func(startD, endD int, startFrac, endFrac float64) color.NRGBA {
+		// All blue, except for midnight-spanning feeds.
+		if startD == endD {
+			return color.NRGBA{0, 0, 255, 255} // blue
+		}
+		return color.NRGBA{255, 0, 0, 255} // red
 	}
 
 	return pp.Render()

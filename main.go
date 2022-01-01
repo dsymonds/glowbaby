@@ -31,7 +31,7 @@ Commands:
 	init			initialise the database file (specified by -db)
 	login			log in to Glow Baby (using credentials ~/.glowbabyrc)
 	sync			synchronise all data from remote
-	plot <type> <dst>	plot data to PNG (type is "sleep")
+	plot <type> <dst>	plot data to PNG (type is "sleep" or "feed")
 
 Options:
 `
@@ -86,7 +86,7 @@ func main() {
 		default:
 			flag.Usage()
 			os.Exit(1)
-		case "sleep":
+		case "sleep", "feed":
 			b, err := plot(context.Background(), db, typ)
 			if err != nil {
 				log.Fatalf("Plotting data: %v", err)
