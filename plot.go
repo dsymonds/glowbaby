@@ -24,30 +24,63 @@ const (
 	plotTextSize    = 16   // points
 )
 
-func plotSleep(ctx context.Context, db *sql.DB) ([]byte, error) {
-	// TODO: record baby timezone from Glow and use that instead of time.Local below.
+func plot(ctx context.Context, db *sql.DB, typ string) ([]byte, error) {
+	switch typ {
+	default:
+		// Shouldn't happen; main.go should filter things out.
+		return nil, fmt.Errorf("unknown plot type %q", typ)
+	case "sleep":
+		return plotSleep(ctx, db)
+	}
+}
 
+type babyInfo struct {
+	babyID              int64
+	firstName, lastName string
+	birthday            time.Time
+}
+
+func loadOneBaby(ctx context.Context, db *sql.DB) (babyInfo, error) {
+	// TODO: record baby timezone from Glow and use that instead of time.Local below.
+	row := db.QueryRowContext(ctx, `SELECT BabyID, FirstName, LastName, Birthday FROM Babies LIMIT 1`)
+	var info babyInfo
+	var bday string
+	err := row.Scan(&info.babyID, &info.firstName, &info.lastName, &bday)
+	if err != nil {
+		return babyInfo{}, fmt.Errorf("loading baby info: %w", err)
+	}
+	info.birthday, err = time.ParseInLocation("2006-01-02", bday, time.Local)
+	if err != nil {
+		return babyInfo{}, fmt.Errorf("parsing baby birthday %q: %w", bday, err)
+	}
+	return info, nil
+}
+
+type polarPlot struct {
+	segments  [][2]int64 // start, end unix epoch
+	title     string
+	zero      time.Time // Centre of the circle (e.g. birthday).
+	colSelect func(startD, endD int, startFrac, endFrac float64) color.NRGBA
+}
+
+func (pp *polarPlot) AddSegment(start, end int64) {
+	pp.segments = append(pp.segments, [2]int64{start, end})
+}
+
+func plotSleep(ctx context.Context, db *sql.DB) ([]byte, error) {
 	// Load baby info.
 	// TODO: Handle multiple babies.
-	row := db.QueryRowContext(ctx, `SELECT BabyID, FirstName, LastName, Birthday FROM Babies LIMIT 1`)
-	var (
-		babyID                    int64
-		firstName, lastName, bday string
-	)
-	if err := row.Scan(&babyID, &firstName, &lastName, &bday); err != nil {
-		return nil, fmt.Errorf("determining baby to plot: %w", err)
-	}
-	log.Printf("Selected %s %s (born %s) for sleep plotting", firstName, lastName, bday)
-	birthday, err := time.ParseInLocation("2006-01-02", bday, time.Local)
+	info, err := loadOneBaby(ctx, db)
 	if err != nil {
-		return nil, fmt.Errorf("parsing baby birthday %q: %w", bday, err)
+		return nil, err
 	}
+	log.Printf("Selected %s %s (born %s) for sleep plotting", info.firstName, info.lastName, info.birthday.Format("2006-01-02"))
 
 	// Load sleep data.
-	var sleepRanges [][2]int64 // start, end unix epoch
+	var pp polarPlot
 	rows, err := db.QueryContext(ctx, `
 		SELECT StartTimestamp, EndTimestamp FROM BabyData
-		WHERE BabyID = ? AND Key = "sleep" ORDER BY StartTimestamp`, babyID)
+		WHERE BabyID = ? AND Key = "sleep" ORDER BY StartTimestamp`, info.babyID)
 	if err != nil {
 		return nil, fmt.Errorf("loading sleep ranges: %w", err)
 	}
@@ -56,65 +89,68 @@ func plotSleep(ctx context.Context, db *sql.DB) ([]byte, error) {
 		if err := rows.Scan(&start, &end); err != nil {
 			return nil, fmt.Errorf("scanning sleep ranges from DB: %w", err)
 		}
-		sleepRanges = append(sleepRanges, [2]int64{start, end})
+		pp.AddSegment(start, end)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("loading sleep ranges from DB: %w", err)
 	}
-	log.Printf("Loaded %d sleep ranges", len(sleepRanges))
+	log.Printf("Loaded %d sleep ranges", len(pp.segments))
 
-	if len(sleepRanges) == 0 {
+	if len(pp.segments) == 0 {
 		log.Fatalf("Sorry, can't plot without any sleep recorded!")
 	}
 
+	pp.title = fmt.Sprintf("Sleep segments for %s %s (born %s)", info.firstName, info.lastName, info.birthday.Format("2006-01-02"))
+	pp.zero = info.birthday
+	pp.colSelect = func(startD, endD int, startFrac, endFrac float64) color.NRGBA {
+		hours := (endFrac-startFrac)*24 + float64(endD-startD)*24
+		switch {
+		case hours >= 5:
+			return color.NRGBA{0, 0, 255, 255} // blue
+		case hours >= 1.5:
+			return color.NRGBA{0, 255, 0, 255} // green
+		default:
+			return color.NRGBA{255, 0, 0, 255} // red
+		}
+	}
+
+	return pp.Render()
+}
+
+func (pp *polarPlot) Render() ([]byte, error) {
 	// Initialise an all-white image.
-	var (
-		white = color.NRGBA{255, 255, 255, 255}
-		blue  = color.NRGBA{0, 0, 255, 255}
-		green = color.NRGBA{0, 255, 0, 255}
-		red   = color.NRGBA{255, 0, 0, 255}
-	)
 	img := image.NewNRGBA(image.Rect(0, 0, plotImageWidth, plotImageHeight))
-	draw.Draw(img, img.Bounds(), &image.Uniform{white}, image.ZP, draw.Src)
+	draw.Draw(img, img.Bounds(), &image.Uniform{color.White}, image.ZP, draw.Src)
 
 	// Add a title.
-	err = writeText(img, 5, 5+plotTextSize, fmt.Sprintf("Sleep segments for %s %s (born %s)", firstName, lastName, bday))
+	err := writeText(img, 5, 5+plotTextSize, pp.title)
 	if err != nil {
 		log.Printf("Writing text: %v", err)
 		// Continue anyway. This was likely a font-loading issue.
 	}
 
 	// Plot data.
-	// Each sleep segment is drawn as an arc, where midnight is at the top,
+	// Each segment is drawn as an arc, where midnight is at the top,
 	// and days extend from the circle centre outwards.
 	// Segments spanning midnight will
 	splitEpoch := func(x int64) (day int, frac float64) {
 		t := time.Unix(x, 0).In(time.Local)
-		day = int(t.Sub(birthday) / (24 * time.Hour))
+		day = int(t.Sub(pp.zero) / (24 * time.Hour))
 		h, m, s := t.Clock()
 		frac = float64(h)/24 + float64(m)/(24*60) + float64(s)/(24*60*60)
 		return
 	}
-	maxDay, _ := splitEpoch(sleepRanges[len(sleepRanges)-1][1])
+	maxDay, _ := splitEpoch(pp.segments[len(pp.segments)-1][1])
 	dayScale := float64(plotImageHeight) / 2 * 0.9 / float64(maxDay)
-	for _, sr := range sleepRanges {
-		startD, startFrac := splitEpoch(sr[0])
-		endD, endFrac := splitEpoch(sr[1])
-		hours := float64(sr[1]-sr[0]) / 3600
+	for _, seg := range pp.segments {
+		startD, startFrac := splitEpoch(seg[0])
+		endD, endFrac := splitEpoch(seg[1])
+
+		col := pp.colSelect(startD, endD, startFrac, endFrac)
 
 		if endFrac < startFrac {
 			// This crosses a midnight.
 			endFrac += float64(endD - startD)
-		}
-
-		var col color.NRGBA
-		switch {
-		case hours >= 5:
-			col = blue
-		case hours >= 1.5:
-			col = green
-		default:
-			col = red
 		}
 
 		for step := 0.0; step <= 1.0; step += 0.0001 { // TODO: adaptive

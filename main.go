@@ -87,9 +87,9 @@ func main() {
 			flag.Usage()
 			os.Exit(1)
 		case "sleep":
-			b, err := plotSleep(context.Background(), db)
+			b, err := plot(context.Background(), db, typ)
 			if err != nil {
-				log.Fatalf("Plotting sleep data: %v", err)
+				log.Fatalf("Plotting data: %v", err)
 			}
 			data = b
 		}
